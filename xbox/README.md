@@ -4,23 +4,11 @@
 
 `https/` builds a separate NXDK title. The Xbox serves the entire controller
 page over TCP 443, displays a pairing QR and runs the campaign locally.
-This hardware test uses a certificate provisioned for one console's IPv4 address.
-The WebTransport experiment below is a separate target.
+The Xbox generates and stores its own HTTPS identity on first launch.
 
-1. With the mbed TLS install and QR generator described in DEPENDENCIES.md
-   available and the root npm dependencies installed, use an activated NXDK shell and run `make -C xbox/https`.
-2. From the repository root, run
-   `python xbox/https/provision.py <xbox-ip> build-xbox/https-rig` with OpenSSL
-   on PATH. Choose a new output directory if provisioning another identity.
-   The script discards the issuing CA key and writes a 14-day server certificate.
-3. Place `xbox/https/bin/default.xbe`, `xbox/https/controller.html`,
-   `server.pem` and that console's `key.pem` together in the Xbox title folder.
-   Keep private keys out of release packages. Relaunch from XBMC.
-4. Transfer only `NeonRoads.cer` to the iPhone through a trusted channel. For
-   trusted HTTPS, install the profile and enable its root under Settings >
-   General > About > Certificate Trust Settings. Remove the test profile after
-   testing. Provision again if the IP changes or the server certificate expires.
-5. Scan the TV code with Safari. With the phone screen-up and its top toward the nose, tap **Enable motion**. The initial resting pose is neutral. Side lean reaches full steering at 10°. Lifting either end controls ship height continuously. The first 0.12° around level is neutral and 0.5° reaches full height. Hold that angle to stay up. Level the deck to descend and land on the road. Before each start, retry or next road, rest the board flat for two seconds. The game zeros pitch and roll and starts automatically. Use **Recenter** if the mount shifts.
+1. Build the dependencies listed in [DEPENDENCIES.md](DEPENDENCIES.md) and run `make -C xbox/https` in an activated NXDK shell.
+2. Copy `https/bin/default.xbe` and `https/controller.html` together into a writable Xbox game folder. Launch the title and scan the code in Safari on the same LAN. See the [installation guide](INSTALL.md) for first launch and upgrades.
+3. With the phone screen-up and its top toward the nose, tap **Enable motion**. The initial resting pose is neutral. Side lean reaches full steering at 10°. Lifting either end controls ship height continuously. The first 0.12° around level is neutral and 0.5° reaches full height. Hold that angle to stay up. Level the deck to descend and land on the road. Before each start, retry or next road, rest the board flat for two seconds. The game zeros pitch and roll and starts automatically. Use **Recenter** if the mount shifts.
 
 To return to the dashboard, tap **Exit to dashboard** on the phone and confirm.
 For hardware testing, POST to `/dashboard` over the same HTTPS connection with

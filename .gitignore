@@ -22,3 +22,4 @@ xbox/main.exe
 xbox/*.iso
 xbox/src/*.obj
 xbox/src/*.c.d
+third_party/jitterentropy/
