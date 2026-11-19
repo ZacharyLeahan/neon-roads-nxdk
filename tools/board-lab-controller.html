@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Neon Roads · Tilt controller</title>
+<style>
+:root{color-scheme:dark;font:18px system-ui;background:#111324;color:#f7f9ff}
+main{max-width:24rem;margin:12vh auto;padding:1rem}h1{line-height:1.1}
+button{font:inherit;font-weight:650;padding:.9rem 1.3rem;background:#7df3d4;border:0;border-radius:.6rem;color:#101722}
+output{display:block;margin:1.5rem 0;font-size:2rem;font-variant-numeric:tabular-nums}
+#pad button{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
+body.playing{margin:0}
+.playing main{box-sizing:border-box;max-width:none;height:100dvh;margin:0;display:grid;
+  grid-template-rows:auto 1fr auto;gap:.55rem;padding:max(.65rem,env(safe-area-inset-top)) max(.75rem,env(safe-area-inset-right)) max(.75rem,env(safe-area-inset-bottom)) max(.75rem,env(safe-area-inset-left))}
+.playing h1,.playing #instructions,.playing output{display:none}
+.playing footer{grid-row:1;display:flex;align-items:center;justify-content:space-between;gap:.5rem} #retrain,#dashboard{font-size:.85rem;padding:.45rem .75rem;color:#eee;background:#363746;min-height:44px} .playing #status{font-size:.9rem;margin:0}
+#pad:not([hidden]){grid-row:2/4;display:grid;gap:.65rem;grid-template-columns:1fr 1fr;grid-template-rows:auto auto minmax(5rem,1fr)}
+#jump{grid-column:1/-1;background:#efa4ff;font-size:clamp(2.4rem,12vmin,5rem)}
+#jump:active{background:#fff0ff}
+#brake{grid-column:1/-1;background:#b8c4d9}
+@media(orientation:landscape){
+  #pad:not([hidden]){grid-template-columns:minmax(8rem,1fr) 3fr;grid-template-rows:1fr 1fr 1fr}
+  #pad #jump{grid-column:2;grid-row:1/4}
+  #pad #brake{grid-column:1}
+}
+</style>
+<main><h1>Neon Roads</h1><p id="instructions">Center the phone screen-up on the deck with the top of the page toward the nose. Enable tilt, then watch the TV for two left leans, two right leans, and two kicks, then choose your ready gesture.</p>
+<button id="enable">Enable tilt</button><section id="pad" hidden><button id="play">Play / retry</button> <button id="center">Recenter</button><button id="brake">Hold brake</button> <button id="jump">Jump</button></section><output id="angle">0°</output><footer><p id="status" role="status">Waiting for permission.</p><button id="retrain" hidden>Redo setup</button><button id="dashboard">Exit to dashboard</button></footer></main>
+<script>
+const button = document.querySelector('#enable'), statusLine = document.querySelector('#status');
+const token = location.hash.slice(1);
+let degrees = 0, sampleTime = 0, center;
+let brake = false, exiting = false;
+const exitButton = document.querySelector('#dashboard');
+exitButton.onclick = async () => {
+  if (!confirm('Leave this game and return the Xbox to its dashboard?')) return;
+  exiting = true;
+  exitButton.disabled = true;
+  try {
+    const response = await fetch('./dashboard', {method:'POST', headers:{'X-Pair':token}});
+    if (response.status !== 202) throw Error(response.status === 403 ? 'Scan the current TV code.' : 'Xbox returned ' + response.status);
+    statusLine.textContent = 'Returning to dashboard.';
+  } catch (error) {
+    exiting = false;
+    exitButton.disabled = false;
+    statusLine.textContent = error.message;
+  }
+};
+const actions = [];
+let sequence = crypto.getRandomValues(new Uint32Array(1))[0] >>> 1;
+function enqueue(type) {
+  if (actions.length < 4) actions.push(type + (++sequence));
+}
+document.querySelector('#play').onclick = () => { if (stage >= DONE) { stage=prompts.length; enqueue('p'); } };
+document.querySelector('#jump').onpointerdown = event => { event.preventDefault(); if (stage === prompts.length) enqueue('j'); };
+document.querySelector('#center').onclick = () => { if (stage < prompts.length) startSetup(); else { center = undefined; savingCenter = true; } };
+const brakeButton = document.querySelector('#brake');
+brakeButton.onpointerdown = event => { brakeButton.setPointerCapture(event.pointerId); brake = true; };
+brakeButton.onpointerup = brakeButton.onlostpointercapture = () => { brake = false; };
+let lastPose=null, wakeLock=null;
+async function keepScreenAwake() {
+  if (document.hidden || !started || wakeLock || !navigator.wakeLock) return;
+  try {
+    const lock=await navigator.wakeLock.request('screen');
+    wakeLock=lock;
+    lock.addEventListener('release',()=>{if(wakeLock===lock)wakeLock=null;});
+  } catch { /* The controller also works when screen wake lock is unavailable. */ }
+}
+document.addEventListener('visibilitychange', () => {
+  brake=false; actions.length=0; lastPose=null; sampleTime=0; since=null;
+  if(stage===0){samples=jitter=0;stillAnchor=center=undefined;}
+  if(!document.hidden)keepScreenAwake();
+});
+const prompts=['Center the phone and hold the board still',
+  ...['Lean left','Lean right'].flatMap(label=>[1,2].map(n=>label+'   '+n+' / 2')),
+  ...[1,2].map(n=>'Kick the board up   '+n+' / 2'),
+  'Choose your ready gesture: tilt or twist','Setup complete'];
+const READY_GESTURE=7, DONE=8;
+const storageKey='neon-roads.board-calibration.v3';
+const retrain=document.querySelector('#retrain');
+const wrap=value=>(value+540)%360-180;
+let stage=0,phase='ready',orientation,started=false,savingCenter=false,storageWarning='';
+let gate=.7,left=0,right=0,jumpAngle=0,trials=[],live=0,peak=0;
+let jumpFraction=.8;
+const workbench=location.pathname.startsWith("/board/");
+let practicePeaks=[];
+let readyVector=null, peakVector=null, stillHeading=null, stillAnchor=null;
+let since=null, trough=0, rise=0, jitter=0, samples=0;
+let armed=false,lastJump=0,waitStart=0,origin=null,pendingStart=false,lastMotion=0;
+const waiting=()=>stage>=DONE && phase!=='racing' && !pendingStart;
+function waitForMovement(now){
+  waitStart=now;origin=null;lastMotion=0;pendingStart=false;
+}
+function playFromMovement(){
+  if(!waiting())return;
+  stage=prompts.length;pendingStart=true;enqueue('p');
+}
+function saveProfile(){
+  try{
+    localStorage.setItem(storageKey,JSON.stringify({center,orientation,gate,left,right,jumpAngle,jumpFraction,readyVector}));
+    if(localStorage.getItem(resetKey)===token)localStorage.removeItem(resetKey);
+    storageWarning='';
+  }catch{storageWarning=' Calibration is available for this tab only.';}
+  retrain.hidden=false;
+}
+function restoreProfile(){
+  try{
+    let v=JSON.parse(localStorage.getItem(storageKey));
+    if(!v){
+      v=JSON.parse(localStorage.getItem('neon-roads.board-calibration.v2'));
+    }
+    if(!v){
+      const old=JSON.parse(localStorage.getItem('neon-roads.board-calibration.v1'));
+      if(old?.vectors?.length!==6)return false;
+      v={center:old.center,orientation:old.orientation,gate:old.restGate,left:old.vectors[1][0],
+         right:old.vectors[2][0],jumpAngle:Math.abs(old.vectors[0][1]),readyVector:old.vectors[5]};
+    }
+    if(!Array.isArray(v.center)||v.center.length!==2||!v.center.every(Number.isFinite)||
+       ![0,90,180,270].includes(v.orientation)||![v.left,v.right,v.jumpAngle,v.gate].every(Number.isFinite)||
+       v.gate<=0||v.gate>3||v.left*v.right>=0||Math.min(Math.abs(v.left),Math.abs(v.right),v.jumpAngle)<=v.gate||
+       Math.max(Math.abs(v.left),Math.abs(v.right),v.jumpAngle)>180)return false;
+    jumpFraction=v.jumpFraction===.8 ? .8 : .6; // Earlier profiles stored a median with a 60% trigger.
+    ({center,orientation,gate,left,right,jumpAngle}=v);if(Array.isArray(v.readyVector)&&v.readyVector.length===3&&v.readyVector.every(Number.isFinite)&&
+       Math.hypot(...v.readyVector)>v.gate&&Math.hypot(...v.readyVector)<360){
+      readyVector=v.readyVector;stage=prompts.length;
+    }else stage=READY_GESTURE;
+    return true;
+  }catch{return false;}
+}
+function clearStep(){since=null;peak=0;trough=0;rise=0;}
+function startSetup(){
+  forgetDraft();practicePeaks=[];lastPose=null;
+  savingCenter=false;center=orientation=undefined;stage=0;left=right=jumpAngle=degrees=jitter=samples=0;
+  gate=.7;trials=[];firstSign=0;gestureBase=null;settledGesture=false;readyVector=peakVector=stillAnchor=stillHeading=null;armed=false;actions.length=0;clearStep();waitForMovement(performance.now());
+}
+retrain.onclick=()=>{
+  if(!confirm('Measure this board again?'))return;
+  const url=new URL(location.href);
+  url.searchParams.set('fresh','1');
+  location.replace(url.href);
+};
+// Track a peak and a local trough. Repeating a lean only requires a small
+// reversal from the previous peak, even when both peaks are on the same side.
+function trackPeak(value,minimum){
+  if(!peak){
+    trough=Math.min(trough,value);
+    if(value>=minimum && value-trough>=Math.max(gate*1.2,rise))peak=value;
+    return false;
+  }
+  peak=Math.max(peak,value);
+  const drop=Math.max(gate*1.2,peak*.20);
+  if(peak-value<drop)return false;
+  if(workbench)practicePeaks[stage-1]=peak;
+  trials.push(peak);trough=value;rise=drop;peak=0;
+  return true;
+}
+let firstSign=0, gestureBase=null, settledGesture=false;
+const draftKey='neon-roads.two-kick-setup.draft';
+function checkpoint(){
+  try { localStorage.setItem(draftKey,JSON.stringify({token,stage,center,orientation,gate,left,right,
+    jumpAngle,trials,firstSign,trough,rise})); } catch {}
+}
+function restoreDraft(){
+  try {
+    const d=JSON.parse(localStorage.getItem(draftKey));
+    if(!d || d.token!==token || !Number.isInteger(d.stage) || d.stage<1 || d.stage>READY_GESTURE ||
+      !Array.isArray(d.center) || d.center.length!==2 || !d.center.every(Number.isFinite) ||
+      !Array.isArray(d.trials) || d.trials.length>2 || !d.trials.every(Number.isFinite) ||
+      ![0,90,180,270].includes(d.orientation) ||
+      ![d.gate,d.left,d.right,d.jumpAngle,d.firstSign,d.trough,d.rise].every(Number.isFinite))return false;
+    ({stage,center,orientation,gate,left,right,jumpAngle,trials,firstSign,trough,rise}=d);
+    return true;
+  } catch {return false;}
+}
+function forgetDraft(){try{localStorage.removeItem(draftKey);}catch{}}
+
+function train(roll,pitch,heading,now){
+  const size=Math.max(Math.abs(roll),Math.abs(pitch));
+  live=stage===0?size:stage<=4?roll:pitch;
+  if(stage===0){
+    if(!stillAnchor){stillAnchor=[roll,pitch];stillHeading=heading;}
+    const spin=Number.isFinite(heading)&&Number.isFinite(stillHeading)?Math.abs(wrap(heading-stillHeading)):0;
+    if(size>1 || spin>1 || Math.hypot(roll-stillAnchor[0],pitch-stillAnchor[1])>1){
+      center=stillAnchor=undefined;lastPose=null;since=null;samples=jitter=0;return;
+    }
+    ++samples;
+    jitter=Math.max(jitter,size);since??=now;
+    if(now-since>=3000 && samples>=12){gate=Math.max(.65,jitter*1.5);stage++;clearStep();checkpoint();}
+    return;
+  }
+  if(stage===READY_GESTURE){
+    // Let the last practice jump settle at any angle before learning a new gesture.
+    if(!gestureBase || Math.abs(roll-gestureBase[0])+Math.abs(pitch-gestureBase[1])>.8 && !settledGesture){
+      gestureBase=[roll,pitch,heading];since=now;return;
+    }
+    if(!settledGesture){if(now-since<900)return;settledGesture=true;}
+    const turn=Number.isFinite(heading)&&Number.isFinite(gestureBase[2])?wrap(heading-gestureBase[2]):0;
+    const v=[roll-gestureBase[0],pitch-gestureBase[1],turn],length=Math.hypot(...v);
+    live=length;
+    if(length>Math.max(1.5,gate*2) && length>peak){peak=length;peakVector=v;since=now;}
+    if(peakVector && (peak-length>=Math.max(gate,peak*.2) || now-since>=650)){
+      readyVector=peakVector;stage=DONE;clearStep();saveProfile();forgetDraft();waitForMovement(now);
+    }
+    return;
+  }
+  const lean=stage<=4, leftSide=stage<=2;
+  const minimum=Math.max(lean?1.6:1.15,gate*1.65);
+  if(lean && !firstSign && Math.abs(roll)>=minimum)firstSign=Math.sign(roll);
+  const value=lean?Math.max(0,roll*(leftSide?firstSign:-firstSign)):Math.abs(pitch);
+  if(!trackPeak(value,minimum))return;
+  stage++;
+  if(stage===3 || stage===5){
+    const maximum=Math.max(...trials);
+    if(stage===3)left=firstSign*maximum;
+    else right=-firstSign*maximum;
+  }else if(stage===READY_GESTURE){jumpAngle=Math.max(...trials);jumpFraction=.8;}
+  if(stage===3 || stage===5 || stage===READY_GESTURE){trials=[];clearStep();}
+  checkpoint();
+
+}
+function ride(roll,pitch,heading,now){
+  degrees=0;
+  if(phase!=='racing'){
+    if(!waiting())return;
+    if(now-waitStart<2000||!origin){origin=[roll,pitch,heading];return;}
+    const twist=Number.isFinite(heading)&&Number.isFinite(origin[2])?wrap(heading-origin[2]):0;
+    const v=[wrap(roll-origin[0]),wrap(pitch-origin[1]),twist];
+    const reference=Math.hypot(...readyVector);
+    const projection=v.reduce((sum,n,i)=>sum+n*readyVector[i],0)/reference;
+    if(projection>=Math.max(gate*1.5,reference*.6) && projection>=.85*Math.hypot(...v))playFromMovement();
+    return;
+  }
+  const range=.8*Math.abs(roll*Math.sign(right)>=0?right:left);
+  degrees=Math.round(28*Math.max(-1,Math.min(1,roll*Math.sign(right)/range)));
+  if(Math.abs(pitch)<=gate && now-lastJump>=180)armed=true;
+  if(armed && Math.abs(pitch)>=Math.max(gate*1.3,jumpAngle*jumpFraction)){enqueue('j');armed=false;lastJump=now;}
+}
+function motion(event){
+  const a=event.acceleration,now=performance.now();
+  if(!document.hidden && stage===0 && a && Math.hypot(a.x??0,a.y??0,a.z??0)>1.0){
+    center=stillAnchor=undefined;lastPose=null;since=null;samples=jitter=0;
+  }
+}
+function sample(event){
+  if(document.hidden||!Number.isFinite(event.beta)||!Number.isFinite(event.gamma))return;
+  const now=performance.now();
+  orientation??=((screen.orientation?.angle??window.orientation??0)+360)%360;
+  const landscape=orientation===90||orientation===270;
+  const roll=(landscape?event.beta:event.gamma)*(orientation>=180?-1:1);
+  const pitch=landscape?event.gamma*(orientation===90?-1:1):event.beta*(orientation===180?-1:1);
+  if(!center){center=[roll,pitch];armed=false;}
+  if(savingCenter){savingCenter=false;saveProfile();}
+  if(!sampleTime || (stage>=DONE && now-sampleTime>500)){
+    waitForMovement(now);since=null;
+    if(stage===0){stillAnchor=null;samples=jitter=0;}
+  }
+  enterController();sampleTime=now;
+  const r=wrap(roll-center[0]),p=wrap(pitch-center[1]);
+  lastPose=[r,p,event.alpha];
+  if(stage<DONE)train(r,p,event.alpha,now);else ride(r,p,event.alpha,now);
+}
+async function transmit() {
+  try {
+    if (exiting) { setTimeout(transmit, 250); return; }
+    const now=performance.now();
+    const inSetup=stage<prompts.length;
+    // A stationary phone may only emit an orientation change when it moves again.
+    // Advance pose-hold timers independently and keep the setup connection alive.
+    if (!document.hidden && stage<DONE && lastPose && now-sampleTime>=100)
+      train(...lastPose,now);
+    if (document.hidden || (!inSetup && phase==='racing' && (!sampleTime || now-sampleTime>2000))) {
+      statusLine.textContent = 'Waiting for a tilt reading.';
+    } else {
+      const action = actions[0] ?? '';
+      const response = await fetch('./tilt/' + degrees, {signal:AbortSignal.timeout(4500),method:'POST', headers:{'X-Pair':token,'X-Brake':brake?'1':'0','X-Action':action,...(workbench?{'X-Pose':(lastPose??[0,0]).slice(0,2).map(v=>Math.round(v*10)).join(','),'X-Peaks':practicePeaks.map(v=>Math.round(v*10)).join(',')}: {}),'X-Setup':stage<prompts.length?stage+1:0,'X-Angles':[live,peak || trials.at(-1) || 0,left,right,jumpAngle*jumpFraction].map(v=>Math.round(v*10)).join(',')}, cache:'no-store'});
+      if (!response.ok) throw Error(response.status === 403 ? 'Scan the current TV code again.' : 'Xbox returned ' + response.status);
+      const nextPhase = await response.text();
+      if (phase !== nextPhase) { armed=false;phase=nextPhase;waitForMovement(performance.now()); }
+      if (action && actions[0] === action) actions.shift();
+      if (!exiting) statusLine.textContent = stage<prompts.length ? prompts[stage] : (phase==='racing'?'Connected to Xbox':'Use your ready gesture to play') + storageWarning;
+    }
+  } catch (error) { statusLine.textContent = error.message; }
+  setTimeout(transmit, stage<prompts.length ? 100 : 24);
+}
+function enterController() {
+  if (started) return;
+  started = true;
+  retrain.hidden = false;
+  keepScreenAwake();
+  window.addEventListener('devicemotion',motion);
+  document.body.classList.add('playing');
+  button.hidden = true;
+  document.querySelector('#pad').hidden = false;
+  setTimeout(transmit,0);
+}
+const resetKey='neon-roads.pending-calibration';
+const url=new URL(location.href);
+const fresh=url.searchParams.get('fresh')==='1';
+let pending=fresh;
+if(fresh){
+  startSetup();
+  try{
+    localStorage.setItem(resetKey,token);
+    url.searchParams.delete('fresh');
+    history.replaceState(null,'',url.href);
+  }catch{}
+}else{
+  try{pending=localStorage.getItem(resetKey)===token;}catch{}
+}
+const resuming=!fresh && restoreDraft();
+if(pending && !resuming){
+  button.textContent='Start calibration';
+  document.querySelector('#instructions').textContent='Rest the phone flat on the board. Tap Start calibration when you are ready to measure center.';
+  statusLine.textContent='Waiting for you to start.';
+}
+if (resuming || (!pending && restoreProfile())) {
+  retrain.hidden = false;
+  document.querySelector('#instructions').textContent = resuming ? 'Resuming board setup. Enable tilt if prompted and watch the TV.' : stage===READY_GESTURE ? 'Your steering and jump settings are saved. Follow the TV to choose your ready gesture.' : 'Saved board setup. Rest the deck level, then use your ready gesture to start. If motion is blocked, tap Enable tilt.';
+  if (/^[a-f0-9]{32}$/.test(token)) window.addEventListener('deviceorientation',sample);
+}
+button.onclick = async () => {
+  try {
+    if (!/^[a-f0-9]{32}$/.test(token)) throw Error('Scan the code on the TV to pair.');
+    if (!window.isSecureContext || !window.DeviceOrientationEvent) throw Error('Tilt is unavailable. Check that Safari trusts the Xbox test certificate.');
+    if (DeviceOrientationEvent.requestPermission && await DeviceOrientationEvent.requestPermission() !== 'granted') throw Error('Motion access was denied.');
+    window.addEventListener('deviceorientation', sample);
+    enterController();
+  } catch (error) { statusLine.textContent = error.message; }
+};
+</script></html>

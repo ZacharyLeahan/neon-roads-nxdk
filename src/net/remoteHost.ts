@@ -104,6 +104,8 @@ export class RemoteHost {
 
   controllerUrl(): string {
     const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    const configured = import.meta.env.VITE_CONTROLLER_ORIGIN?.replace(/\/$/, '');
+    if (configured) return `${configured}/controller.html#${this.code}`;
     const origin = local && __DEV_LAN_ORIGIN__ ? __DEV_LAN_ORIGIN__ : location.origin;
     const base = local && __DEV_LAN_ORIGIN__ ? '/' : location.pathname.replace(/[^/]*$/, '');
     return `${origin}${base}controller.html#${this.code}`;

@@ -275,12 +275,12 @@ export function phoneScreen(p: PhoneInfo): string {
           <div class="pair-status ${p.status} ${p.names.length ? 'connected' : ''}"><i></i>${statusText}</div>
           <ol class="pair-steps">
             <li>Scan the QR code with your phone camera, or open <code>${esc(p.url.replace(/#.*$/, ''))}</code> and type the code.</li>
-            <li>Hold the phone sideways: <b>left thumb</b> drags to steer (up/down = throttle), <b>right thumb</b> jumps. Tilt steering and cruise are in the pad's ⚙ menu.</li>
+            <li>Hold the phone sideways, enable motion access once, then <b>rotate the phone to steer</b>. Acceleration is automatic; tap <b>JUMP</b> to jump.</li>
             <li>In menus the phone becomes a D-pad with A/B buttons.</li>
           </ol>
           <p class="dim small">Inputs travel peer-to-peer over WebRTC — directly between your phone and this browser, no game server. A free public broker is only used for the initial handshake.${
             p.lanHint
-              ? ' You are running a local server, so your phone must be on the same Wi-Fi as this computer.'
+              ? ' You are running a local server, so your phone must be on the same Wi-Fi as this computer. Phone motion sensors require the controller page itself to use HTTPS.'
               : ' Any network works; being on the same Wi-Fi gives the lowest latency.'
           }</p>
           <div class="actions left">

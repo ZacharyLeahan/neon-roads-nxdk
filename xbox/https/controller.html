@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Neon Roads · Tilt controller</title>
+<style>
+:root{color-scheme:dark;font:18px system-ui;background:#111324;color:#f7f9ff}
+main{max-width:24rem;margin:12vh auto;padding:1rem}h1{line-height:1.1}
+button{font:inherit;font-weight:650;padding:.9rem 1.3rem;background:#7df3d4;border:0;border-radius:.6rem;color:#101722}
+output{display:block;margin:1.5rem 0;font-size:2rem;font-variant-numeric:tabular-nums}
+#pad button{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
+body.playing{margin:0}
+.playing main{box-sizing:border-box;max-width:none;height:100dvh;margin:0;display:grid;
+  grid-template-rows:auto 1fr auto;gap:.55rem;padding:max(.65rem,env(safe-area-inset-top)) max(.75rem,env(safe-area-inset-right)) max(.75rem,env(safe-area-inset-bottom)) max(.75rem,env(safe-area-inset-left))}
+.playing h1,.playing #instructions,.playing output{display:none}
+.playing footer{grid-row:1;display:flex;align-items:center;justify-content:space-between;gap:.5rem} #dashboard{font-size:.85rem;padding:.45rem .75rem;color:#eee;background:#363746;min-height:44px} .playing #status{font-size:.9rem;margin:0}
+#pad:not([hidden]){grid-row:2/4;display:grid;gap:.65rem;grid-template-columns:1fr 1fr;grid-template-rows:auto auto minmax(5rem,1fr)}
+#jump{grid-column:1/-1;background:#efa4ff;font-size:clamp(2.4rem,12vmin,5rem)}
+#jump:active{background:#fff0ff}
+#brake{grid-column:1/-1;background:#b8c4d9}
+@media(orientation:landscape){
+  #pad:not([hidden]){grid-template-columns:minmax(8rem,1fr) 3fr;grid-template-rows:1fr 1fr 1fr}
+  #pad #jump{grid-column:2;grid-row:1/4}
+  #pad #brake{grid-column:1}
+}
+</style>
+<main><h1>Neon Roads</h1><p id="instructions">Lay the phone flat, screen up, with its top toward the nose. Tap Enable motion and rest the board flat for two seconds before each run. Lean 10° for full steering. Lift the tail or nose just 0.5° for full height. Hold to hover and level the deck to land.</p>
+<button id="enable">Enable motion</button><section id="pad" hidden><button id="center">Recenter</button><button id="brake">Hold brake</button> <button id="jump">Jump</button></section><output id="angle">0°</output><footer><p id="status" role="status">Waiting for permission.</p><button id="dashboard">Exit to dashboard</button></footer></main>
+<script>
+const button = document.querySelector('#enable'), statusLine = document.querySelector('#status');
+const token = location.hash.slice(1);
+let degrees = 0, sampleTime = 0, center;
+let brake = false, exiting = false;
+const exitButton = document.querySelector('#dashboard');
+exitButton.onclick = async () => {
+  if (!confirm('Leave this game and return the Xbox to its dashboard?')) return;
+  exiting = true;
+  exitButton.disabled = true;
+  try {
+    const response = await fetch('./dashboard', {method:'POST', headers:{'X-Pair':token}});
+    if (response.status !== 202) throw Error(response.status === 403 ? 'Scan the current TV code.' : 'Xbox returned ' + response.status);
+    statusLine.textContent = 'Returning to dashboard.';
+  } catch (error) {
+    exiting = false;
+    exitButton.disabled = false;
+    statusLine.textContent = error.message;
+  }
+};
+const actions = [];
+let sequence = crypto.getRandomValues(new Uint32Array(1))[0] >>> 1;
+function enqueue(type, strength=100) {
+  if (actions.length < 4) actions.push({id:type + (++sequence),strength});
+}
+document.querySelector('#jump').onpointerdown=e=>{e.preventDefault();enqueue('j');};
+document.querySelector('#center').onclick=resetNeutral;
+const brakeButton = document.querySelector('#brake');
+brakeButton.onpointerdown = event => { brakeButton.setPointerCapture(event.pointerId); brake = true; };
+brakeButton.onpointerup = brakeButton.onlostpointercapture = () => { brake = false; };
+let wakeLock=null;
+async function keepScreenAwake() {
+  if (document.hidden || !started || wakeLock || !navigator.wakeLock) return;
+  try {
+    const lock=await navigator.wakeLock.request('screen');
+    wakeLock=lock;
+    lock.addEventListener('release',()=>{if(wakeLock===lock)wakeLock=null;});
+  } catch { /* The controller also works when screen wake lock is unavailable. */ }
+}
+const FULL_STEER=10, NEUTRAL=.12, FULL_HEIGHT=.5, SETTLE_MS=2000;
+let lastPose, neutralPose, neutralSince=0, pendingStart=false, settlePercent=0, rollDegrees=null, accelY=null;
+let pitchDegrees=null, boardHeight=0, peakHeight=0;
+let started=false,phase='ready';
+let motionAccess=false, motionTime=-Infinity, vertical=0, gravityRest=null, liftPeak=0;
+function motion(event){
+  if(document.hidden)return;
+  const now=performance.now();
+  accelY=Number.isFinite(event.acceleration?.y)?event.acceleration.y:null;
+  let z=event.acceleration?.z;
+  if(!Number.isFinite(z)){
+    const raw=event.accelerationIncludingGravity?.z;
+    if(!Number.isFinite(raw))return;
+    gravityRest??=raw;
+    z=raw-gravityRest;
+    if(Math.abs(z)<.6)gravityRest+=.03*z;
+  }
+  motionTime=now;
+  vertical=z;
+  liftPeak=Math.max(liftPeak,Math.abs(z));
+}
+const wrap=value=>(value+540)%360-180;
+let runPitch=0, kickPeak=0, landingPitch=null, landingSince=0;
+function rideHeight(pitch,now){
+  const offset=wrap(pitch-center[1]), size=Math.abs(offset);
+  kickPeak=Math.max(kickPeak,size);
+  const restBand=Math.max(NEUTRAL,Math.min(2,kickPeak*.22));
+  // A large kick can settle at a new truck angle. Require a return near the
+  // run baseline and a stable pitch before adopting that resting position.
+  if(size<=restBand && Math.abs(wrap(pitch-runPitch))<=2){
+    if(landingPitch===null || Math.abs(wrap(pitch-landingPitch))>.10){
+      landingPitch=pitch;landingSince=now;
+    }
+    if(now-landingSince>=220 && kickPeak>=FULL_HEIGHT){
+      center[1]=pitch;
+      kickPeak=0;
+    }
+    return 0;
+  }
+  landingPitch=null;
+  const fraction=(size-restBand)/(Math.max(FULL_HEIGHT,kickPeak)-restBand);
+  return Math.round(100*Math.max(0,Math.min(1,fraction)));
+}
+function resetNeutral(){
+  kickPeak=0;landingPitch=null;
+  center=neutralPose=undefined;
+  neutralSince=0;settlePercent=0;pendingStart=false;
+  degrees=boardHeight=peakHeight=0;
+  rollDegrees=pitchDegrees=null;
+  actions.length=0;
+}
+function settle(now){
+  if(center || !lastPose || document.hidden)return;
+  const [roll,pitch]=lastPose;
+  // The mounted deck may have a small resting slope. Reject raised or moving boards.
+  if(Math.max(Math.abs(roll),Math.abs(pitch))>8 ||
+     (now-sampleTime>350 && now-motionTime>350) ||
+     (now-motionTime<350 && Math.abs(vertical)>.65)){
+    neutralPose=undefined;settlePercent=0;return;
+  }
+  if(!neutralPose || Math.max(Math.abs(roll-neutralPose[0]),Math.abs(pitch-neutralPose[1]))>.12){
+    neutralPose=[roll,pitch];neutralSince=now;
+  }
+  settlePercent=Math.min(100,Math.floor(100*(now-neutralSince)/SETTLE_MS));
+  if(settlePercent===100){
+    center=[roll,pitch];runPitch=pitch;kickPeak=0;landingPitch=null;rollDegrees=pitchDegrees=0;
+    if(phase!=='racing'){pendingStart=true;enqueue('p');}
+  }
+}
+document.addEventListener('visibilitychange',()=>{
+  brake=false;lastPose=undefined;sampleTime=0;motionTime=-Infinity;
+  resetNeutral();
+  if(!document.hidden)keepScreenAwake();
+});
+function sample(event){
+  if(document.hidden || !Number.isFinite(event.gamma) || !Number.isFinite(event.beta))return;
+  const angle=((screen.orientation?.angle??window.orientation??0)+360)%360;
+  const landscape=angle===90 || angle===270;
+  const roll=(landscape?event.beta:event.gamma)*(angle>=180?-1:1);
+  const pitch=landscape?event.gamma*(angle===90?-1:1):event.beta*(angle===180?-1:1);
+  const now=performance.now();
+  lastPose=[roll,pitch];sampleTime=now;
+  if(!center){settle(now);return;}
+  if(pendingStart || phase!=='racing')return;
+  boardHeight=rideHeight(pitch,now);
+  pitchDegrees=wrap(pitch-center[1]);
+  const side=rollDegrees=wrap(roll-center[0]);
+  if(phase==='racing')peakHeight=Math.max(peakHeight,boardHeight);
+  sampleTime=now;
+  degrees=Math.round(28*Math.max(-1,Math.min(1,side/FULL_STEER)));
+}
+async function transmit(){
+  if(!document.hidden && !exiting){
+    try{
+      settle(performance.now());
+      const action=actions[0];
+      const steer=performance.now()-sampleTime<2000?degrees:0;
+      // Keep a short kick that rose and fell between two HTTPS updates.
+      const now=performance.now();
+      const poseLive=pitchDegrees!==null && (now-sampleTime<1500 || now-motionTime<1000);
+      const height=poseLive?Math.max(boardHeight,peakHeight):0;
+      const poseHeaders=poseLive?{'X-Board-Pose':[rollDegrees,pitchDegrees].map(n=>Math.round(n*100)).join(',')}:{};
+      const yHeaders=now-motionTime<1000 && accelY!==null?{'X-Accel-Y':String(Math.round(accelY*100))}:{};
+      peakHeight=0;
+      const peak=liftPeak;
+      liftPeak=0;
+      const motionHeaders=performance.now()-motionTime<1000?{'X-Lift':[Math.round(vertical*100),Math.round(peak*100)].join(',')}:{};
+      const response=await fetch('./tilt/'+steer,{method:'POST',signal:AbortSignal.timeout(4500),
+        headers:{'X-Settle':String(settlePercent),...motionHeaders,...poseHeaders,...yHeaders,'X-Board-Height':String(height),'X-Pair':token,'X-Brake':brake?'1':'0','X-Action':action?.id??'','X-Jump-Strength':String(action?.strength??100)},cache:'no-store'});
+      if(!response.ok)throw Error(response.status===403?'Scan the current TV code.':'Xbox returned '+response.status);
+      const next=await response.text();
+      if(next!==phase){
+        phase=next;
+        if(next==='racing')pendingStart=false;
+        else resetNeutral();
+      }
+      if(action && actions[0]===action){
+        actions.shift();
+      }
+      const cue=phase==='racing'?'Board height '+height+'%':'Rest board flat: '+settlePercent+'%';
+      const sensor=!motionAccess?'motion unavailable':performance.now()-motionTime>1000?'waiting for motion':'Lift '+vertical.toFixed(1)+' m/s²';
+      statusLine.textContent=cue+' · Pitch '+(pitchDegrees===null?'—':pitchDegrees.toFixed(2)+'°')+' · '+sensor;
+    }catch(error){statusLine.textContent=error.message;}
+  }
+  setTimeout(transmit,24);
+}
+function enterController(){
+  if(started)return;
+  started=true;keepScreenAwake();
+  document.body.classList.add('playing');button.hidden=true;
+  document.querySelector('#pad').hidden=false;void transmit();
+}
+button.onclick = async () => {
+  try {
+    if (!/^[a-f0-9]{32}$/.test(token)) throw Error('Scan the code on the TV to pair.');
+    if (!window.isSecureContext || !window.DeviceOrientationEvent) throw Error('Tilt is unavailable. Check that Safari trusts the Xbox test certificate.');
+    // Both requests must originate from this tap on iOS.
+    const motionApi=window.DeviceMotionEvent;
+    const [tiltPermission,motionPermission]=await Promise.allSettled([
+      DeviceOrientationEvent.requestPermission?.()??'granted',
+      motionApi ? motionApi.requestPermission?.()??'granted' : 'unavailable'
+    ]);
+    if(tiltPermission.status!=='fulfilled'||tiltPermission.value!=='granted')throw Error('Tilt access was denied.');
+    motionAccess=motionPermission.status==='fulfilled' && motionPermission.value==='granted';
+    if(motionAccess)window.addEventListener('devicemotion',motion);
+    window.addEventListener('deviceorientation', sample);
+    enterController();
+  } catch (error) { statusLine.textContent = error.message; }
+};
+</script></html>

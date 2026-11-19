@@ -97,6 +97,20 @@ class App {
     this.bindUi();
     this.setMenuWorld(0);
     this.show('title');
+    if (new URLSearchParams(location.search).has('board')) {
+      this.session.manualRetry = true;
+      void import('./controller/workbench').then(({ openWorkbench }) => openWorkbench({
+        phase: () => this.screen === 'playing' ? (this.session.ship.phase === 'dead' ? 'lost' : 'racing') :
+          this.screen === 'results' ? 'finished' : 'ready',
+        play: () => {
+          if (this.screen === 'results') this.nextRoad();
+          else if (this.screen === 'paused') this.togglePause();
+          else if (this.screen === 'playing') this.restartRun();
+          else this.startCampaign(0, 0);
+        },
+        bind: read => { this.input.remoteSource = read; },
+      }));
+    }
     document.getElementById('boot')?.remove();
     requestAnimationFrame((t) => this.loop(t));
   }

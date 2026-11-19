@@ -210,7 +210,7 @@ const LYDIAN = [0, 2, 4, 6, 7, 9, 11];
 const MIXO = [0, 2, 4, 5, 7, 9, 10];
 
 /** Theme presets: generic modal progressions; every melody is generated from the seed. */
-const THEMES: Theme[] = [
+export const THEMES: Theme[] = [
   { bpm: 112, root: 45, scale: MINOR, prog: [0, 5, 2, 6], seed: 11, arpStyle: 0, swing: 0 },
   { bpm: 124, root: 40, scale: PHRYGIAN, prog: [0, 1, 0, 6], seed: 23, arpStyle: 1, swing: 0 },
   { bpm: 96, root: 48, scale: LYDIAN, prog: [0, 1, 4, 3], seed: 37, arpStyle: 2, swing: 0.08 },

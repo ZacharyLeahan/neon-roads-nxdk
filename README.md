@@ -4,7 +4,7 @@
 
 **Ride the floating highways. Survive the void.**
 
-A neon-retro, floating-highway racer that runs in your browser.<br>
+A neon-retro, floating-highway racer for the browser and original Xbox.<br>
 It's a tribute to **SkyRoads**, the 1993 DOS classic by BlueMoon Software.
 
 [![Build and deploy](https://github.com/abhas9/neon-roads/actions/workflows/deploy.yml/badge.svg)](https://github.com/abhas9/neon-roads/actions/workflows/deploy.yml)
@@ -21,6 +21,7 @@ It's a tribute to **SkyRoads**, the 1993 DOS classic by BlueMoon Software.
 
 ## Table of contents
 
+- [Play on an original Xbox](#play-on-an-original-xbox)
 - [About](#about)
 - [A tribute to SkyRoads](#a-tribute-to-skyroads)
 - [Features](#features)
@@ -38,11 +39,25 @@ It's a tribute to **SkyRoads**, the 1993 DOS classic by BlueMoon Software.
 - [Credits](#credits)
 - [License](#license)
 
+## Play on an original Xbox
+
+![A skateboard-controlled ship lifts off and lands on Easy Cruise. The Xbox HUD shows pitch, height command, and ON ROAD when the ship touches down.](docs/screenshots/xbox-easy-cruise.gif)
+
+*Captured directly from an original Xbox during a skateboard run.*
+
+The Xbox runs the game, displays the pairing QR code on the TV, and serves the iPhone controller over HTTPS on your local network. Once the game is installed, the console and phone handle the entire session.
+
+1. Build the NXDK title, provision a certificate for your Xbox's LAN address, and copy the executable, controller page, and certificate files to the same game folder. [Xbox build and installation guide](xbox/README.md#play-neon-roads-on-an-original-xbox)
+2. Launch the game from the Xbox dashboard. Connect the iPhone to the same LAN, scan the TV code in Safari, and tap **Enable motion**. Safari may show a certificate warning. The installation guide covers how to trust your console's certificate.
+3. Secure the phone screen-up with its top toward the nose of the board. Rest the board flat for **two seconds**. The TV progress bar fills, the current pitch and roll become zero, and **Easy Cruise** starts. Each retry and new road takes a fresh zero.
+4. Lean left or right to steer. **10°** gives full steering. Lift the tail or nose to raise the ship, hold your angle to stay up, then lower the deck to land. A **0.5°** lift can reach full height. After a larger kick, the descent follows the size of that kick and a nearby steady resting angle becomes neutral.
+5. Stay in the middle of Easy Cruise for a clear route, or try the optional gaps in the outside lanes. **First Light** follows. To check a landing, look for **ON ROAD** on the TV. **Height command** is what the phone requested, and **Ship Y** is the ship's position in the world, so it can be above zero on a raised road.
+
 ## About
 
 Neon Roads is an arcade platform-racer. You pilot a small hover ship along roads suspended in space: seven lanes of tiles, blocks, tunnels and gaps. Oxygen drains every second, fuel burns with every metre, and gravity changes from road to road. Reach the gate at the end before you run out of air.
 
-It is built with [three.js](https://threejs.org) and TypeScript and runs entirely in the browser: no install, no accounts, no server. Every level, model, texture and piece of music in this repository is original. The visuals are procedural shaders and the soundtrack is generated live with the Web Audio API.
+The browser version is built with [three.js](https://threejs.org) and TypeScript and runs entirely in the browser: no install, no accounts, no server. Every level, model, texture and piece of music in this repository is original. The visuals are procedural shaders and the soundtrack is generated live with the Web Audio API.
 
 ## A tribute to SkyRoads
 
@@ -130,8 +145,8 @@ Reach the glowing gate at the end of each road before your oxygen or fuel runs o
 
 | Action | Keyboard | Gamepad | Touch / phone |
 |---|---|---|---|
-| Steer | `←` `→` or `A` `D` | Left stick / D-pad | Drag the pad left or right (or tilt) |
-| Accelerate / brake | `↑` `↓` or `W` `S` | RT / LT | Drag the pad up or down (or cruise) |
+| Steer | `←` `→` or `A` `D` | Left stick / D-pad | Tilt the phone (touch fallback available) |
+| Accelerate / brake | `↑` `↓` or `W` `S` | RT / LT | Auto-accelerate (touch fallback available) |
 | Jump | `Space` | A | **JUMP** |
 | Restart | `R` | Y / Back | ⟲ |
 | Pause | `Esc` / `P` | Start | ❚❚ |
@@ -212,18 +227,25 @@ Every road remembers your fastest run.
 
 The post is kept within X's 280-character limit. When you play on a local dev server, the shared link points to the public site. On a fork deployed to GitHub Pages, it points to that fork.
 
+### Skateboard calibration on Windows
+
+Run `npm run dev` and open `/?board` on the Windows machine through the phone-reachable HTTPS address for that server. Scan the QR code with the mounted phone and enable tilt. The workbench runs the Windows game with experimental calibration. The original Xbox release uses 10° for full steering and continuous tail or nose lift for flight height. Both devices need access to the same server.
+
+The white marker follows the board. The dashed marks show full steering and the jump threshold. The workbench keeps the two accepted peaks for each motion in the current session. After setup, try a few softer and firmer kicks in the game and watch for **Jump registered**. A returning phone can reuse its profile or choose **Redo setup**.
+
 ## Use your phone as a controller
 
 Works on the hosted site and locally.
 
 1. Open the game on a computer and choose **Phone Controller** on the title screen.
-2. Scan the QR code with your phone's camera, or open [`abhas9.github.io/neon-roads/controller.html`](https://abhas9.github.io/neon-roads/controller.html) on the phone and enter the five-letter code.
+2. Scan the QR code with your phone's camera, or open the controller URL shown on the computer and enter the five-letter code.
 3. Hold the phone sideways:
-   - **Left thumb:** drag to steer; up and down is throttle.
-   - **Right thumb:** jump.
+   - Tap **Enable tilt** once if the phone asks for motion permission.
+   - Rotate the phone like a steering wheel. The ship accelerates automatically.
+   - Tap **JUMP** to jump; use **Re-center** whenever you change your grip.
    - **In menus:** the phone becomes a D-pad with A/B buttons.
 
-**On the pad:** tap 👻 to toggle the ghost. The ⚙ menu has tilt-to-steer, cruise (auto-accelerate), vibration and steering sensitivity. The phone also shows your oxygen, fuel and speed, and it vibrates on jumps, boosts and crashes.
+**On the pad:** tilt steering and auto-accelerate are on by default, so there is no virtual joystick during a run. Tap 👻 to toggle the ghost. The ⚙ menu has touch fallback, vibration and steering sensitivity. The phone also shows your oxygen, fuel and speed, and it vibrates on jumps, boosts and crashes.
 
 ### How it works
 
@@ -240,8 +262,9 @@ Works on the hosted site and locally.
 ### Troubleshooting
 
 - **"No game found for code…"**: keep the pairing screen open on the computer, or press *New code* and scan again.
-- **Tilt steering is unavailable on iPhone:** iOS only allows motion sensors on HTTPS pages. It works on the hosted site; on a local HTTP dev server, use touch steering.
-- **Local dev server:** run `npm run dev` and make sure the phone is on the same Wi-Fi. The QR code automatically points at your computer's LAN address.
+- **Tilt permission does not appear:** phone browsers only expose motion sensors to HTTPS pages. Same Wi-Fi makes the WebRTC path local, but it does not remove this browser security rule.
+- **Local Windows game, secure phone page:** host the built controller page on HTTPS (for example GitHub Pages), then set `$env:VITE_CONTROLLER_ORIGIN='https://your-name.github.io/your-repo'; npm run dev` in PowerShell. The QR code uses that secure controller while inputs still travel peer-to-peer to the Windows game.
+- **Local dev server:** run `npm run dev` and make sure the phone is on the same Wi-Fi. Without `VITE_CONTROLLER_ORIGIN`, the QR code points at the computer's LAN address; that is suitable for touch fallback, but most phones block tilt on plain HTTP.
 - **Use your own broker:** to avoid the public PeerJS broker, run a [PeerServer](https://github.com/peers/peerjs-server) and build with `VITE_PEER_HOST`, `VITE_PEER_PORT`, `VITE_PEER_PATH` and `VITE_PEER_SECURE`. In GitHub Actions you can set these as repository variables.
 - **Verbose connection logs:** add `?peerdebug` to either page's URL.
 
