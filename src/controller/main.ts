@@ -6,7 +6,7 @@ import type { Haptic, HostMsg, PhoneButton, PhoneMsg } from '../net/protocol';
 
 const app = document.getElementById('app')!;
 const HEARTBEAT_MS = 33;
-const PREFS_KEY = 'neon-pad-prefs';
+const PREFS_KEY = 'neon-pad-prefs-v2';
 
 interface Prefs {
   tilt: boolean;
@@ -16,7 +16,9 @@ interface Prefs {
 }
 
 function loadPrefs(): Prefs {
-  const d: Prefs = { tilt: false, cruise: false, haptics: true, sensitivity: 1 };
+  // Tilt + cruise is the primary phone-controller experience. Touch remains a fallback
+  // for devices that do not expose orientation sensors.
+  const d: Prefs = { tilt: true, cruise: true, haptics: true, sensitivity: 1 };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') };
   } catch {
@@ -32,6 +34,7 @@ class PadApp {
   private state = { steer: 0, throttle: 0, jump: false };
   private tiltSteer = 0;
   private tiltZero: number | null = null;
+  private tiltReady = false;
   private seq = 0;
   private lastSent = '';
   private lastSendTime = 0;
@@ -148,9 +151,9 @@ class PadApp {
   /** Streams analog state: immediately on change, and as a heartbeat so a lost packet self-heals. */
   private tick(force = false): void {
     if (!this.input?.open) return;
-    const steer = this.prefs.tilt && this.mode === 'game' ? this.tiltSteer : this.state.steer;
+    const steer = this.prefs.tilt && this.tiltReady && this.mode === 'game' ? this.tiltSteer : this.state.steer;
     let throttle = this.state.throttle;
-    if (this.prefs.cruise && this.mode === 'game' && throttle > -0.25) throttle = 1;
+    if (this.prefs.cruise && this.mode === 'game' && (!this.prefs.tilt || this.tiltReady) && throttle > -0.25) throttle = 1;
     const buttons = this.state.jump ? BTN_JUMP : 0;
     const key = `${steer.toFixed(2)}|${throttle.toFixed(2)}|${buttons}`;
     const now = performance.now();
@@ -261,8 +264,8 @@ class PadApp {
     const settings = `
       <div class="settings hidden">
         <h3>Controller</h3>
-        <label><input type="checkbox" data-pref="tilt" ${this.prefs.tilt ? 'checked' : ''}/> Tilt to steer</label>
-        <label><input type="checkbox" data-pref="cruise" ${this.prefs.cruise ? 'checked' : ''}/> Cruise (auto-accelerate, drag down to brake)</label>
+        <label><input type="checkbox" data-pref="tilt" ${this.prefs.tilt ? 'checked' : ''}/> Tilt steering</label>
+        <label><input type="checkbox" data-pref="cruise" ${this.prefs.cruise ? 'checked' : ''}/> Auto-accelerate</label>
         <label><input type="checkbox" data-pref="haptics" ${this.prefs.haptics ? 'checked' : ''}/> Vibration</label>
         <label class="range">Steering sensitivity <input type="range" min="0.6" max="1.8" step="0.1" value="${this.prefs.sensitivity}" data-pref="sensitivity"/></label>
         <div class="settings-actions">
@@ -272,19 +275,34 @@ class PadApp {
         </div>
       </div>`;
     if (this.mode === 'game') {
+      const drive = this.prefs.tilt
+        ? `<section class="tilt" aria-label="Tilt steering status">
+            <div class="tilt-horizon"><div class="tilt-wheel"><i></i><i></i><i></i></div></div>
+            <div class="tilt-label">ROTATE PHONE TO STEER</div>
+            <button class="recenter" data-act="calibrate">RE-CENTER</button>
+          </section>`
+        : `<section class="stick" aria-label="Touch steering and throttle">
+            <div class="stick-ring"><div class="stick-knob"></div></div>
+            <div class="stick-label">DRAG TO STEER · UP/DOWN THROTTLE</div>
+          </section>`;
       app.innerHTML = `${top}
         <main class="pad">
-          <section class="stick" aria-label="Steer and throttle">
-            <div class="stick-ring"><div class="stick-knob"></div></div>
-            <div class="stick-label">${this.prefs.tilt ? 'THROTTLE · tilt to steer' : 'DRAG TO STEER · UP/DOWN THROTTLE'}</div>
-            ${this.prefs.cruise ? '<div class="cruise-tag">CRUISE</div>' : ''}
-          </section>
+          ${drive}
           <section class="jump-zone">
             <div class="speed"><b></b></div>
             <button class="jump" aria-label="Jump">JUMP</button>
           </section>
-        </main>${settings}`;
-      this.bindStick();
+        </main>
+        <div class="tilt-gate hidden" role="dialog" aria-live="polite">
+          <div class="tilt-card">
+            <h2>Ready to steer?</h2>
+            <p>Hold the phone sideways, then enable motion control. This position becomes straight ahead.</p>
+            <button class="enable-tilt" data-act="enable-tilt">ENABLE TILT</button>
+            <button class="touch-fallback" data-act="touch-fallback">Use touch controls</button>
+            <p class="tilt-error hidden"></p>
+          </div>
+        </div>${settings}`;
+      if (!this.prefs.tilt) this.bindStick();
       const jump = app.querySelector<HTMLElement>('.jump')!;
       const down = (e: Event) => {
         e.preventDefault();
@@ -332,7 +350,50 @@ class PadApp {
     });
     this.bindSettings();
     this.updateStatusBar();
-    if (this.prefs.tilt) void this.enableTilt();
+    if (this.prefs.tilt && this.mode === 'game') this.prepareTilt();
+  }
+
+  private prepareTilt(): void {
+    if (this.tiltReady) {
+      this.tiltZero = null;
+      return;
+    }
+    const permissionApi = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> } | undefined;
+    if (!window.isSecureContext) {
+      this.showTiltGate('Tilt sensors require HTTPS on phones. Open the secure controller URL shown by the Windows game.');
+      return;
+    }
+    if (typeof permissionApi?.requestPermission === 'function') {
+      this.showTiltGate();
+      return;
+    }
+    void this.enableTilt(false).then((ok) => {
+      if (!ok) this.showTiltGate('This browser did not expose a tilt sensor. You can switch to touch controls.');
+    });
+  }
+
+  private showTiltGate(error = ''): void {
+    const gate = app.querySelector<HTMLElement>('.tilt-gate');
+    const errorEl = app.querySelector<HTMLElement>('.tilt-error');
+    if (!gate || !errorEl) return;
+    gate.classList.remove('hidden');
+    errorEl.textContent = error;
+    errorEl.classList.toggle('hidden', !error);
+    gate.querySelector('[data-act=enable-tilt]')?.addEventListener('click', async () => {
+      if (await this.enableTilt(true)) gate.classList.add('hidden');
+      else {
+        errorEl.textContent = window.isSecureContext
+          ? 'Motion access was not granted. Allow Motion & Orientation Access in the browser, then try again.'
+          : 'Tilt sensors require an HTTPS controller page.';
+        errorEl.classList.remove('hidden');
+      }
+    });
+    gate.querySelector('[data-act=touch-fallback]')?.addEventListener('click', () => {
+      this.prefs.tilt = false;
+      this.prefs.cruise = false;
+      this.savePrefs();
+      this.renderPad();
+    });
   }
 
   private bindSettings(): void {
@@ -343,17 +404,18 @@ class PadApp {
       this.renderPad();
     });
     panel.querySelector('[data-act=fullscreen]')?.addEventListener('click', () => void goFullscreen());
-    panel.querySelector('[data-act=calibrate]')?.addEventListener('click', () => (this.tiltZero = null));
+    app.querySelectorAll('[data-act=calibrate]').forEach((button) =>
+      button.addEventListener('click', () => {
+        this.tiltZero = null;
+        this.vibrate(8);
+      }),
+    );
     panel.querySelectorAll<HTMLInputElement>('[data-pref]').forEach((inp) =>
       inp.addEventListener('change', async () => {
         const key = inp.dataset.pref as keyof Prefs;
         (this.prefs as unknown as Record<string, unknown>)[key] = inp.type === 'checkbox' ? inp.checked : Number(inp.value);
-        if (key === 'tilt' && inp.checked && !(await this.enableTilt())) {
-          inp.checked = false;
-          this.prefs.tilt = false;
-          alert('Tilt needs motion-sensor permission (on iPhone this requires the page to be served over HTTPS).');
-        }
-        localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
+        if (key === 'tilt' && !inp.checked) this.tiltReady = false;
+        this.savePrefs();
       }),
     );
   }
@@ -407,10 +469,15 @@ class PadApp {
     stick.addEventListener('pointercancel', end);
   }
 
-  private async enableTilt(): Promise<boolean> {
+  private savePrefs(): void {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
+  }
+
+  private async enableTilt(requestPermission: boolean): Promise<boolean> {
     const DOE = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> } | undefined;
     if (!DOE) return false;
     if (typeof DOE.requestPermission === 'function') {
+      if (!requestPermission) return false;
       try {
         if ((await DOE.requestPermission()) !== 'granted') return false;
       } catch {
@@ -419,6 +486,8 @@ class PadApp {
     }
     window.removeEventListener('deviceorientation', this.onOrientation);
     window.addEventListener('deviceorientation', this.onOrientation);
+    this.tiltReady = true;
+    this.tiltZero = null;
     return true;
   }
 
@@ -432,6 +501,8 @@ class PadApp {
     const deg = raw - this.tiltZero;
     const v = Math.max(-1, Math.min(1, (deg / 28) * this.prefs.sensitivity));
     this.tiltSteer = Math.abs(v) < 0.06 ? 0 : v;
+    const wheel = app.querySelector<HTMLElement>('.tilt-wheel');
+    if (wheel) wheel.style.transform = `rotate(${this.tiltSteer * 34}deg)`;
     this.tick();
   };
 

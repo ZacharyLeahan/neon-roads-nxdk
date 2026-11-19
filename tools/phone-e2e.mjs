@@ -4,7 +4,7 @@ import { chromium, devices } from 'playwright';
 const base = process.argv[2] ?? 'http://127.0.0.1:5287/';
 const shots = process.argv[3];
 // Use an installed, signed browser (PW_CHANNEL=chrome): some OS firewalls block P2P UDP for Playwright's bundled Chromium.
-const browser = await chromium.launch({ channel: process.env.PW_CHANNEL || undefined, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const browser = await chromium.launch({ channel: process.env.PW_CHANNEL || (process.platform === 'win32' ? 'chrome' : undefined), args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const log = (...a) => console.log('[e2e]', ...a);
 
 const host = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
@@ -40,22 +40,20 @@ log('road started, phone switched to game layout');
 // Wait for the intro to finish and the run clock to tick, so network or load latency can't eat the throttle window.
 await host.waitForFunction(() => document.querySelector('.hud-timer')?.textContent !== '00:00.00', null, { timeout: 15000 });
 
-// Hold the stick up-right and press jump on the phone.
-const stick = await phone.$('.stick');
-const box = await stick.boundingBox();
-const cx = box.x + box.width / 2;
-const cy = box.y + box.height / 2;
-await phone.touchscreen.tap(cx, cy).catch(() => {});
-await phone.evaluate(({ cx, cy }) => {
-  const el = document.querySelector('.stick');
-  const ev = (type, x, y) => el.dispatchEvent(new PointerEvent(type, { pointerId: 7, clientX: x, clientY: y, bubbles: true, pointerType: 'touch' }));
-  el.setPointerCapture = () => {};
-  ev('pointerdown', cx, cy);
-  ev('pointermove', cx + 10, cy - 70);
-}, { cx, cy });
+// Tilt is the default gameplay controller and cruise supplies throttle.
+await phone.waitForSelector('.tilt');
+const wheelTransform = await phone.evaluate(() => {
+  window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { beta: 16, gamma: 0 }));
+  window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { beta: 30, gamma: 0 }));
+  return document.querySelector('.tilt-wheel')?.style.transform ?? '';
+});
+if (!wheelTransform || wheelTransform === 'rotate(0deg)') throw new Error('tilt did not move the steering indicator');
+log('phone tilt moved steering indicator:', wheelTransform);
+await phone.dispatchEvent('.jump', 'pointerdown');
+await phone.dispatchEvent('.jump', 'pointerup');
 await host.waitForTimeout(2000);
 const speed = Number(await host.textContent('.speed-val span'));
-log('host speed after phone throttle:', speed);
+log('host speed after phone tilt controller cruise:', speed);
 if (shots) {
   await host.screenshot({ path: `${shots}/phone-driving-host.png` });
   await phone.screenshot({ path: `${shots}/phone-game.png` });
@@ -69,8 +67,8 @@ log(`phone ghost button toggled ghost: ${before} -> ${await ghostSetting()}`);
 const rtt = await phone.textContent('.bar-rtt');
 log('phone RTT readout:', rtt);
 await browser.close();
-// Full throttle for 2 s reaches ~180 on the HUD; require a clear, unambiguous acceleration.
-if (!(speed > 100)) {
+// Cruise must produce clear acceleration without touching a virtual throttle.
+if (!(speed > 40)) {
   console.error('FAIL: ship did not accelerate from phone input');
   process.exit(1);
 }

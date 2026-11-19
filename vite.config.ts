@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { windowsBoard } from './tools/windows-board';
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -18,7 +19,8 @@ export default defineConfig(({ command }) => {
   const lan = command === 'serve' ? lanAddress() : null;
   return {
     base: './',
-    server: { port: PORT, host: true },
+    plugins: [windowsBoard()],
+    server: { port: PORT, host: true, allowedHosts: ['.ts.net'] },
     preview: { port: PORT + 1, host: true },
     define: {
       __DEV_LAN_ORIGIN__: JSON.stringify(lan ? `http://${lan}:${PORT}` : ''),

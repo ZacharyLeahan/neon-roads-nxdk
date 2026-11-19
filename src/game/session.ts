@@ -71,6 +71,7 @@ export class Session {
   private q: InputFrame = { steer: 0, throttle: 0, jump: false };
   private gq: InputFrame = { steer: 0, throttle: 0, jump: false };
   private events = 0;
+  manualRetry = false;
   private endTimer = 0;
   private ended = false;
   private lowO2Beep = 0;
@@ -235,6 +236,7 @@ export class Session {
     const cfg = this.cfg!;
     const s = this.ship;
     if (s.phase === 'dead' && cfg.mode === 'campaign') {
+      if (this.manualRetry) return;
       this.onAutoRestart?.();
       this.reset();
       return;
