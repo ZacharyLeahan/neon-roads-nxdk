@@ -41,13 +41,15 @@ It's a tribute to **SkyRoads**, the 1993 DOS classic by BlueMoon Software.
 
 ## Play on an original Xbox
 
+**[Download the playable Xbox ZIP](https://github.com/ZacharyLeahan/neon-roads-nxdk/releases/download/v0.1.0-alpha.1/neon-roads-nxdk-test.zip)** · [Alpha release and checksums](https://github.com/ZacharyLeahan/neon-roads-nxdk/releases/tag/v0.1.0-alpha.1)
+
 ![A skateboard-controlled ship lifts off and lands on Easy Cruise. The Xbox HUD shows pitch, height command, and ON ROAD when the ship touches down.](docs/screenshots/xbox-easy-cruise.gif)
 
 *Captured directly from an original Xbox during a skateboard run.*
 
 The Xbox runs the game, displays the pairing QR code on the TV, and serves the iPhone controller over HTTPS on your local network. Once the game is installed, the console and phone handle the entire session.
 
-1. Build the NXDK title, provision a certificate for your Xbox's LAN address, and copy the executable, controller page, and certificate files to the same game folder. [Xbox build and installation guide](xbox/README.md#play-neon-roads-on-an-original-xbox)
+1. Extract the download on your computer. It includes the built `default.xbe`, the phone controller page, and the certificate provisioning script. Generate the TLS files for your Xbox’s LAN address and copy the four game files together to your console. [Install the prebuilt game](xbox/INSTALL.md) · [Build from source](xbox/README.md#play-neon-roads-on-an-original-xbox)
 2. Launch the game from the Xbox dashboard. Connect the iPhone to the same LAN, scan the TV code in Safari, and tap **Enable motion**. Safari may show a certificate warning. The installation guide covers how to trust your console's certificate.
 3. Secure the phone screen-up with its top toward the nose of the board. Rest the board flat for **two seconds**. The TV progress bar fills, the current pitch and roll become zero, and **Easy Cruise** starts. Each retry and new road takes a fresh zero.
 4. Lean left or right to steer. **10°** gives full steering. Lift the tail or nose to raise the ship, hold your angle to stay up, then lower the deck to land. A **0.5°** lift can reach full height. After a larger kick, the descent follows the size of that kick and a nearby steady resting angle becomes neutral.
