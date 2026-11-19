@@ -15,6 +15,7 @@
 #include <qrcodegen.h>
 #include "game.h"
 #include "audio.h"
+#include "identity.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -68,22 +69,43 @@ static int setup_tls(void)
 {
     unsigned char pem[4096], pairing[16];
     size_t n = load("D:\\key.pem", pem, sizeof(pem));
-    if (!n || mbedtls_sha256(pem, n, seed, 0)) return -1;
-    if (psa_crypto_init() != PSA_SUCCESS) return -5;
+    int supplied = GetFileAttributesA("D:\\key.pem") != INVALID_FILE_ATTRIBUTES ||
+                   GetFileAttributesA("D:\\server.pem") != INVALID_FILE_ATTRIBUTES;
+    if (supplied) {
+        if (!n || mbedtls_sha256(pem, n, seed, 0))
+            return -1;
+    } else {
+        debugPrint("Preparing local HTTPS identity...\n");
+        if (xbox_entropy_seed(seed))
+            return -7;
+    }
+    if (psa_crypto_init() != PSA_SUCCESS)
+        return -5;
     mbedtls_ctr_drbg_init(&rng);
     mbedtls_entropy_init(&entropy);
     mbedtls_pk_init(&key);
     mbedtls_x509_crt_init(&cert);
     mbedtls_ssl_config_init(&config);
     int rc = mbedtls_ctr_drbg_seed(&rng, mbedtls_entropy_func, &entropy, NULL, 0);
-    if (!rc) rc = mbedtls_pk_parse_key(&key, pem, n + 1, NULL, 0, mbedtls_ctr_drbg_random, &rng);
+    if (!rc && supplied)
+        rc = mbedtls_pk_parse_key(&key, pem, n + 1, NULL, 0, mbedtls_ctr_drbg_random, &rng);
     mbedtls_platform_zeroize(pem, sizeof(pem));
-    if (rc) return rc;
-    n = load("D:\\server.pem", pem, sizeof(pem));
-    if (!n) return -2;
-    if ((rc = mbedtls_x509_crt_parse(&cert, pem, n + 1))) return rc;
-    if ((rc = mbedtls_ssl_config_defaults(&config, MBEDTLS_SSL_IS_SERVER,
-              MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT))) return rc;
+    if (rc)
+        return rc;
+    if (!supplied) {
+        if ((rc = xbox_auto_identity(&key, &cert, &rng, xbox_ip)))
+            return rc;
+    } else {
+        n = load("D:\\server.pem", pem, sizeof(pem));
+        if (!n)
+            return -2;
+        if ((rc = mbedtls_x509_crt_parse(&cert, pem, n + 1)))
+            return rc;
+    }
+    if ((rc =
+             mbedtls_ssl_config_defaults(&config, MBEDTLS_SSL_IS_SERVER,
+                                         MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)))
+        return rc;
     /* TLS 1.2 ECDHE/ECDSA is supported by the iPhone and the ported library. */
     mbedtls_ssl_conf_max_tls_version(&config, MBEDTLS_SSL_VERSION_TLS1_2);
     mbedtls_ssl_conf_rng(&config, mbedtls_ctr_drbg_random, &rng);
@@ -309,6 +331,7 @@ int main(void)
     if (rc) goto error;
     page_size = load("D:\\controller.html", page, sizeof(page));
     if (!page_size) { rc = -3; goto error; }
+    snprintf(xbox_ip,sizeof(xbox_ip),"%s",ip4addr_ntoa(netif_ip4_addr(g_pnetif)));
     rc = setup_tls();
     if (rc) goto error;
     int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -318,7 +341,7 @@ int main(void)
     if (fd < 0 || bind(fd,(struct sockaddr *)&addr,sizeof(addr)) || listen(fd,4)) {
         rc = -4; goto error;
     }
-    snprintf(xbox_ip,sizeof(xbox_ip),"%s",ip4addr_ntoa(netif_ip4_addr(g_pnetif)));
+
     if (!audio_open()) debugPrint("Audio initialization failed\n");
     game_init();
     if (CreateThread(NULL,65536,play_thread,NULL,0,NULL)) serve(fd);

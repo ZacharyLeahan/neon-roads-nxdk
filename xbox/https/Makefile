@@ -4,7 +4,9 @@ NXDK_NET = y
 NXDK_SDL = y
 QR_DIR := $(CURDIR)/../../third_party/qr-code-generator/c
 TLS_DIR := $(CURDIR)/../../build-xbox/mbedtls-install
-SRCS = $(CURDIR)/server.c $(CURDIR)/audio.c $(CURDIR)/game.c $(CURDIR)/race.c $(CURDIR)/view.c $(CURDIR)/../src/picoquic_nxdk_platform.c $(QR_DIR)/qrcodegen.c
+JENT_DIR := $(CURDIR)/../../third_party/jitterentropy
+JENT_SRCS := $(wildcard $(JENT_DIR)/src/*.c) $(wildcard $(JENT_DIR)/arch/*.c)
+SRCS = $(JENT_SRCS) $(CURDIR)/entropy_seed.c $(CURDIR)/identity.c $(CURDIR)/server.c $(CURDIR)/audio.c $(CURDIR)/game.c $(CURDIR)/race.c $(CURDIR)/view.c $(CURDIR)/../src/picoquic_nxdk_platform.c $(QR_DIR)/qrcodegen.c
 include $(NXDK_DIR)/Makefile
 $(OBJS): CFLAGS += -I$(CURDIR)/../compat -I$(QR_DIR) -I$(TLS_DIR)/include -I$(CURDIR)/../src -I$(CURDIR)/../../third_party/mbedtls/library -DMBEDTLS_USER_CONFIG_FILE=\"mbedtls_nxdk_config.h\"
 main.exe: $(TLS_DIR)/lib/libmbedtls.lib $(TLS_DIR)/lib/libmbedx509.lib $(TLS_DIR)/lib/libmbedcrypto.lib
@@ -18,3 +20,6 @@ $(CURDIR)/audio.obj $(CURDIR)/view.obj $(CURDIR)/race.obj: CFLAGS += -O2
 
 $(CURDIR)/view.obj $(CURDIR)/game.obj $(CURDIR)/audio.obj $(CURDIR)/race.obj: $(CURDIR)/game.h
 $(CURDIR)/game.obj $(CURDIR)/server.obj $(CURDIR)/audio.obj: $(CURDIR)/audio.h
+
+$(JENT_SRCS:.c=.obj) $(CURDIR)/entropy_seed.obj: CFLAGS += -I$(JENT_DIR) -I$(JENT_DIR)/src -DJENT_STATIC_LIB -ffreestanding -fno-strict-aliasing -DJENT_BAREMETAL -O0
+$(CURDIR)/identity.obj $(CURDIR)/server.obj: $(CURDIR)/identity.h

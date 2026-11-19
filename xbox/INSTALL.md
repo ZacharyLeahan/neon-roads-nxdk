@@ -1,13 +1,10 @@
 # Install Neon Roads on an original Xbox
 
-1. Extract **neon-roads-nxdk-test.zip** on your computer. The game files are in the `NeonRoads` folder.
-2. Find the Xbox's LAN IPv4 address in the dashboard network settings. On a computer with Python 3 and OpenSSL installed, open a terminal in the extracted folder containing `provision.py`. Replace `<xbox-ip>` with that address and run:
+1. Extract the game ZIP. Copy the entire `NeonRoads` folder to a writable location on your modded Xbox hard drive, such as `F:\Games\NeonRoads\`. It contains `default.xbe` and `controller.html`.
+2. Launch `default.xbe` from the dashboard. The Xbox creates its own HTTPS key and certificate, saves them beside the game, and displays a QR code on the TV.
+3. Connect your iPhone to the same LAN and scan the code. Safari may ask you to continue because the Xbox signed its own certificate. Check that the address matches the Xbox before continuing, then tap **Enable motion**.
+4. Mount the phone screen-up with its top toward the nose. Rest the deck flat for two seconds to start Easy Cruise. Lean to steer, lift either end to raise the ship, and level the deck to land.
 
-   ```sh
-   python provision.py <xbox-ip> console-tls
-   ```
+Keep `auto-key.pem` on your console. Leave it and `auto-cert.der` in place when updating the game. On launch the game refreshes the certificate if its LAN address has changed or the certificate has expired. When distributing the game, copy only the original two game files.
 
-   The script creates a new `console-tls` directory. If OpenSSL is outside your PATH, pass `--openssl` followed by the full path to the executable.
-3. Copy `key.pem` and `server.pem` from `console-tls` into `NeonRoads` beside `default.xbe` and `controller.html`. Transfer those four files to the same game folder on your modded Xbox, for example `F:\Games\NeonRoads\`. Keep the private key with your installation.
-4. For trusted HTTPS, transfer `NeonRoads.cer` from `console-tls` to the iPhone via a trusted channel. Install the profile and enable its root in **Settings → General → About → Certificate Trust Settings**. The server certificate is valid for 14 days. If it expires or the Xbox address changes, provision into a fresh directory, replace the Xbox's two PEM files, and update the iPhone's trusted profile.
-5. Launch `default.xbe` from the dashboard. Put the iPhone on the same LAN and scan the TV code in Safari. Secure the phone screen-up with its top toward the nose, tap **Enable motion**, and rest the deck flat for two seconds. Easy Cruise starts automatically. Lean to steer, lift either end to raise the ship, and level the deck to land.
+**Upgrading from alpha 1.** The game continues to use an existing `key.pem` and `server.pem` pair. Install the new build in a fresh folder to switch to automatic setup.
